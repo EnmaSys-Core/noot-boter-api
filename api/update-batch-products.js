@@ -108,6 +108,7 @@ export default async function handler(request, response) {
                 weightGrams = 750;
             }
             
+            // --- Comprehensive Single-Select Handling ---
             const normalizedPackageSize = normalize(packageSize);
             if (selectOptions.packageSize?.has(normalizedPackageSize)) {
                 updates.packageSize = { id: selectOptions.packageSize.get(normalizedPackageSize) };
@@ -139,7 +140,14 @@ export default async function handler(request, response) {
             if (selectOptions.baseProductGroup?.has(normalizedBaseProductGroup)) {
                 updates.baseProductGroup = { id: selectOptions.baseProductGroup.get(normalizedBaseProductGroup) };
             }
-
+            
+            const countryOfOriginName = mtbRecordFields.countryOfOrigin;
+            const normalizedCountry = normalize(countryOfOriginName);
+            if(selectOptions.countryOfOrigin?.has(normalizedCountry)) {
+                 updates.countryOfOrigin = { id: selectOptions.countryOfOrigin.get(normalizedCountry) };
+            }
+            
+            // --- Multi-Select and other fields ---
             const ingredientsText = mtbRecordFields.Ingredients || "";
             const allergenMatches = ingredientsText.match(/\b([A-Z][A-Z\s]+)\b/g) || [];
             updates.allergens = allergenMatches.map(allergen => {
@@ -149,7 +157,6 @@ export default async function handler(request, response) {
 
             updates.supplierProductName = mtbRecordFields.supplierProductName;
             updates.Ingredients = mtbRecordFields.Ingredients;
-            updates.countryOfOrigin = mtbRecordFields.countryOfOrigin;
             updates.supplierProductUrl = mtbRecordFields.supplierProductUrl;
             updates.isOrganic = mtbRecordFields.isOrganic || false;
             updates.isRaw = mtbRecordFields.isRaw || false;
@@ -195,5 +202,3 @@ export default async function handler(request, response) {
         return response.status(500).json({ error: error.message, details: logDetails });
     }
 }
-// --- End of file: input
-// 
