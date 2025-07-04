@@ -6,6 +6,10 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 // --- Airtable API Configuration ---
 const AIRTABLE_API_URL = 'https://api.airtable.com/v0';
 
+// ** NEW: Normalization function to make matching robust **
+// This removes all whitespace and converts to lowercase.
+const normalize = (str) => (str || '').replace(/\s/g, '').toLowerCase();
+
 // This function fetches the schema for a specific table to get the options for select fields.
 async function getSelectOptions(baseId, pat, tableName) {
     const url = `https://api.airtable.com/v0/meta/bases/${baseId}/tables`;
@@ -20,8 +24,7 @@ async function getSelectOptions(baseId, pat, tableName) {
     for (const field of table.fields) {
         if (field.type === 'singleSelect' || field.type === 'multipleSelects') {
             optionsMap[field.name] = new Map(
-                // *** DEFENSIVE CODING: Trim whitespace from option names to prevent mismatches ***
-                field.options.choices.map(choice => [choice.name.trim(), choice.id])
+                field.options.choices.map(choice => [normalize(choice.name), choice.id])
             );
         }
     }
@@ -30,7 +33,6 @@ async function getSelectOptions(baseId, pat, tableName) {
 
 
 export default async function handler(request, response) {
-    // --- Security & Setup ---
     if (request.method !== 'POST') {
         return response.status(405).json({ error: 'Method Not Allowed' });
     }
@@ -42,29 +44,16 @@ export default async function handler(request, response) {
         return response.status(401).json({ error: 'Invalid password.' });
     }
 
-    console.log("Password accepted. Starting batch update.");
     const logDetails = [];
 
     try {
         const sptTableName = "SPT - Sellable Product Table";
         const mtbTableName = "MTB - Prices, purchase and sell";
 
-        // --- Step 1: Fetch Select Field Options for robust updates ---
         logDetails.push("Fetching field options from Airtable schema...");
         const selectOptions = await getSelectOptions(AIRTABLE_BASE_ID, AIRTABLE_PAT, sptTableName);
-        
-        // *** ENHANCED LOGGING: Print the fetched options to the Vercel server logs for debugging ***
-        console.log("--- Fetched Select Options ---");
-        for (const [fieldName, options] of Object.entries(selectOptions)) {
-            console.log(`Field: ${fieldName}`);
-            for (const [name, id] of options.entries()) {
-                console.log(`  - Option Name: "${name}", ID: "${id}"`);
-            }
-        }
-        console.log("------------------------------");
         logDetails.push("Successfully fetched select options.");
 
-        // --- Step 2: Fetch all records from the "Batch Update" view in SPT ---
         const viewName = "Batch Update";
         const sptTableUrl = `${AIRTABLE_API_URL}/${AIRTABLE_BASE_ID}/${encodeURIComponent(sptTableName)}?view=${encodeURIComponent(viewName)}`;
         
@@ -75,20 +64,17 @@ export default async function handler(request, response) {
         const recordsToUpdate = sptData.records;
 
         if (recordsToUpdate.length === 0) {
-            logDetails.push("No records found in the 'Batch Update' view. Nothing to do.");
+            logDetails.push("No records found in the 'Batch Update' view.");
             return response.status(200).json({ message: "No records to update.", details: logDetails });
         }
         logDetails.push(`Found ${recordsToUpdate.length} records to update.`);
 
-        // --- Step 3: Fetch ALL records from MTB to create a lookup map ---
         const mtbTableUrl = `${AIRTABLE_API_URL}/${AIRTABLE_BASE_ID}/${encodeURIComponent(mtbTableName)}`;
         const mtbResponse = await fetch(mtbTableUrl, { headers: { 'Authorization': `Bearer ${AIRTABLE_PAT}` } });
         if (!mtbResponse.ok) throw new Error(`Failed to fetch MTB records: ${await mtbResponse.text()}`);
         const mtbData = await mtbResponse.json();
         const mtbLookup = new Map(mtbData.records.map(rec => [rec.fields.baseProductId, rec.fields]));
-        console.log(`Created lookup map with ${mtbLookup.size} MTB records.`);
-
-        // --- Step 4: Loop through each SPT record and prepare the updates ---
+        
         const updatePayloads = [];
         for (const sptRecord of recordsToUpdate) {
             const linkedBaseId = sptRecord.fields.linkedBaseProductId;
@@ -122,21 +108,20 @@ export default async function handler(request, response) {
                 weightGrams = 750;
             }
             
-            // *** DEFENSIVE CODING: Trim whitespace before checking map ***
-            const trimmedPackageSize = packageSize?.trim();
-            if (trimmedPackageSize && selectOptions.packageSize?.has(trimmedPackageSize)) {
-                updates.packageSize = { id: selectOptions.packageSize.get(trimmedPackageSize) };
-            } else {
-                updates.packageSize = trimmedPackageSize; 
+            const normalizedPackageSize = normalize(packageSize);
+            if (selectOptions.packageSize?.has(normalizedPackageSize)) {
+                updates.packageSize = { id: selectOptions.packageSize.get(normalizedPackageSize) };
             }
+
             updates.sellingPrice = sellingPrice;
             updates.weightGrams = weightGrams;
 
             let productType = null;
             if (packageSize?.includes("Bag")) productType = "Nut Bag";
             else if (packageSize?.includes("Jar")) productType = "Nut Butter Jar";
-            if(productType && selectOptions.productType?.has(productType)) {
-                updates.productType = { id: selectOptions.productType.get(productType) };
+            const normalizedProductType = normalize(productType);
+            if (selectOptions.productType?.has(normalizedProductType)) {
+                updates.productType = { id: selectOptions.productType.get(normalizedProductType) };
             }
 
             let category = null;
@@ -144,8 +129,15 @@ export default async function handler(request, response) {
             if (productType === "Nut Butter Jar") category = "Nut Butters";
             else if (baseProductGroupText.includes("mix")) category = "Mixes";
             else category = "Whole Nuts";
-            if(category && selectOptions.category?.has(category)) {
-                updates.category = { id: selectOptions.category.get(category) };
+            const normalizedCategory = normalize(category);
+            if (selectOptions.category?.has(normalizedCategory)) {
+                updates.category = { id: selectOptions.category.get(normalizedCategory) };
+            }
+            
+            const baseProductGroupName = mtbRecordFields.baseProductGroup?.name;
+            const normalizedBaseProductGroup = normalize(baseProductGroupName);
+            if (selectOptions.baseProductGroup?.has(normalizedBaseProductGroup)) {
+                updates.baseProductGroup = { id: selectOptions.baseProductGroup.get(normalizedBaseProductGroup) };
             }
 
             const ingredientsText = mtbRecordFields.Ingredients || "";
@@ -171,7 +163,6 @@ export default async function handler(request, response) {
             updatePayloads.push({ id: sptRecord.id, fields: updates });
         }
 
-        // --- Step 5: Send updates to Airtable in batches of 10 ---
         for (let i = 0; i < updatePayloads.length; i += 10) {
             const batch = updatePayloads.slice(i, i + 10);
             logDetails.push(`Updating batch of ${batch.length} records...`);
@@ -204,3 +195,5 @@ export default async function handler(request, response) {
         return response.status(500).json({ error: error.message, details: logDetails });
     }
 }
+// --- End of file: input
+// 
