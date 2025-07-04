@@ -101,17 +101,20 @@ export default async function handler(request, response) {
                 weightGrams = 750;
             }
 
-            updates.packageSize = packageSize;
+            updates.packageSize = { name: packageSize }; // packageSize is a single select
             updates.sellingPrice = sellingPrice;
             updates.weightGrams = weightGrams;
 
             let productType = null;
             if (packageSize?.includes("Bag")) productType = "Nut Bag";
             else if (packageSize?.includes("Jar")) productType = "Nut Butter Jar";
-            if(productType) updates.productType = { name: productType };
+            
+            // =================================================================
+            // --- DIAGNOSTIC CHANGE: The following line has been removed ---
+            // if(productType) updates.productType = { name: productType };
+            // =================================================================
 
             let category = null;
-            // *** BUG FIX: Correctly access the .name property before converting to lowercase ***
             const baseProductGroup = mtbRecordFields.baseProductGroup?.name?.toLowerCase() || '';
             if (productType === "Nut Butter Jar") {
                 category = "Nut Butters";
@@ -123,7 +126,6 @@ export default async function handler(request, response) {
             if(category) updates.category = { name: category };
 
             updates.supplierProductName = mtbRecordFields.supplierProductName;
-            // *** BUG FIX: Copying a single select field requires passing the object with the name property ***
             if (mtbRecordFields.baseProductGroup) {
                updates.baseProductGroup = { name: mtbRecordFields.baseProductGroup.name };
             }
