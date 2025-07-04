@@ -50,7 +50,15 @@
         function addToLog(message, isError = false) {
             const timestamp = new Date().toLocaleTimeString();
             const logMessage = document.createElement('div');
-            logMessage.innerHTML = `<span class="text-gray-500">${timestamp}:</span> <span class="${isError ? 'text-red-400' : 'text-green-300'}">${message}</span>`;
+            // Sanitize message to prevent HTML injection
+            const textNode = document.createTextNode(message);
+            const messageSpan = document.createElement('span');
+            messageSpan.appendChild(textNode);
+            
+            logMessage.innerHTML = `<span class="text-gray-500">${timestamp}:</span> `;
+            messageSpan.className = isError ? 'text-red-400' : 'text-green-300';
+            logMessage.appendChild(messageSpan);
+
             logElement.appendChild(logMessage);
             logContainer.scrollTop = logContainer.scrollHeight;
         }
@@ -62,9 +70,8 @@
                 return;
             }
 
-            // Show log and disable button
             logContainer.classList.remove('hidden');
-            logElement.innerHTML = ''; // Clear previous logs
+            logElement.innerHTML = '';
             updateButton.disabled = true;
             updateButton.textContent = 'Updating... Please Wait...';
 
@@ -79,19 +86,26 @@
                     body: JSON.stringify({ password: password }),
                 });
 
-                const result = await response.json();
-
+                // --- NEW, MORE ROBUST ERROR HANDLING ---
                 if (!response.ok) {
-                    throw new Error(result.error || 'An unknown error occurred.');
+                    // If the server response is not OK (e.g., 404, 500),
+                    // we try to get the error text from the response body.
+                    const errorText = await response.text();
+                    // We throw a detailed error that will be caught by the catch block.
+                    throw new Error(`Server responded with status ${response.status}. Response: ${errorText}`);
                 }
                 
+                const result = await response.json();
+                
                 addToLog(`SUCCESS: ${result.message}`);
-                result.details.forEach(detail => addToLog(detail));
+                if (result.details) {
+                    result.details.forEach(detail => addToLog(detail));
+                }
 
             } catch (error) {
+                // The error message will now be much more informative.
                 addToLog(`FATAL ERROR: ${error.message}`, true);
             } finally {
-                // Re-enable button
                 updateButton.disabled = false;
                 updateButton.textContent = 'Update Products';
                 addToLog('Process finished.');
@@ -100,3 +114,4 @@
     </script>
 </body>
 </html>
+<!-- End of file input -->
