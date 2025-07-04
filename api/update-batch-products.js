@@ -80,7 +80,8 @@ export default async function handler(request, response) {
                 weightGrams = 750;
             }
 
-            if (packageSize) updates.packageSize = { name: packageSize };
+            // *** BUG FIX: Send packageSize as a simple string for the 'Single line text' field ***
+            updates.packageSize = packageSize;
             updates.sellingPrice = sellingPrice;
             updates.weightGrams = weightGrams;
 
@@ -107,7 +108,6 @@ export default async function handler(request, response) {
                 return { name: name };
             });
 
-            // Add other fields
             updates.supplierProductName = mtbRecordFields.supplierProductName;
             updates.Ingredients = mtbRecordFields.Ingredients;
             updates.countryOfOrigin = mtbRecordFields.countryOfOrigin;
@@ -129,8 +129,6 @@ export default async function handler(request, response) {
             const batch = updatePayloads.slice(i, i + 10);
             logDetails.push(`Updating batch of ${batch.length} records...`);
 
-            // *** NEW DIAGNOSTIC LOGGING ***
-            // This will print the exact data being sent to Airtable in the Vercel logs.
             console.log("--- PAYLOAD TO BE SENT TO AIRTABLE ---");
             console.log(JSON.stringify(batch, null, 2));
             console.log("------------------------------------");
@@ -161,3 +159,4 @@ export default async function handler(request, response) {
         return response.status(500).json({ error: error.message, details: logDetails });
     }
 }
+// --- End of file: input
