@@ -47,7 +47,6 @@ export default async function handler(request, response) {
 
 
         // --- Step 2: Fetch ALL records from MTB to create a lookup map ---
-        // *** BUG FIX: Corrected the MTB table name to match your Airtable base ***
         const mtbTableName = "MTB - Prices, purchase and sell";
         const mtbTableUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(mtbTableName)}`;
         const mtbResponse = await fetch(mtbTableUrl, {
@@ -112,14 +111,22 @@ export default async function handler(request, response) {
             if(productType) updates.productType = { name: productType };
 
             let category = null;
-            const baseProductGroup = mtbRecordFields.baseProductGroup?.toLowerCase() || '';
-            if (productType === "Nut Butter Jar") category = "Nut Butters";
-            else if (baseProductGroup.includes("mix")) category = "Mixes";
-            else category = "Whole Nuts";
+            // *** BUG FIX: Correctly access the .name property before converting to lowercase ***
+            const baseProductGroup = mtbRecordFields.baseProductGroup?.name?.toLowerCase() || '';
+            if (productType === "Nut Butter Jar") {
+                category = "Nut Butters";
+            } else if (baseProductGroup.includes("mix")) {
+                category = "Mixes";
+            } else {
+                category = "Whole Nuts";
+            }
             if(category) updates.category = { name: category };
 
             updates.supplierProductName = mtbRecordFields.supplierProductName;
-            updates.baseProductGroup = mtbRecordFields.baseProductGroup;
+            // *** BUG FIX: Copying a single select field requires passing the object with the name property ***
+            if (mtbRecordFields.baseProductGroup) {
+               updates.baseProductGroup = { name: mtbRecordFields.baseProductGroup.name };
+            }
             updates.Ingredients = mtbRecordFields.Ingredients;
             updates.countryOfOrigin = mtbRecordFields.countryOfOrigin;
             updates.supplierProductUrl = mtbRecordFields.supplierProductUrl;
