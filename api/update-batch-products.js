@@ -7,7 +7,6 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 const AIRTABLE_API_URL = 'https://api.airtable.com/v0';
 
 // This function fetches the schema for a specific table to get the options for select fields.
-// This is more robust than relying on text names.
 async function getSelectOptions(baseId, pat, tableName) {
     const url = `https://api.airtable.com/v0/meta/bases/${baseId}/tables`;
     const response = await fetch(url, { headers: { 'Authorization': `Bearer ${pat}` } });
@@ -21,7 +20,8 @@ async function getSelectOptions(baseId, pat, tableName) {
     for (const field of table.fields) {
         if (field.type === 'singleSelect' || field.type === 'multipleSelects') {
             optionsMap[field.name] = new Map(
-                field.options.choices.map(choice => [choice.name, choice.id])
+                // *** DEFENSIVE CODING: Trim whitespace from option names to prevent mismatches ***
+                field.options.choices.map(choice => [choice.name.trim(), choice.id])
             );
         }
     }
@@ -52,7 +52,17 @@ export default async function handler(request, response) {
         // --- Step 1: Fetch Select Field Options for robust updates ---
         logDetails.push("Fetching field options from Airtable schema...");
         const selectOptions = await getSelectOptions(AIRTABLE_BASE_ID, AIRTABLE_PAT, sptTableName);
-        console.log("Successfully fetched select options.");
+        
+        // *** ENHANCED LOGGING: Print the fetched options to the Vercel server logs for debugging ***
+        console.log("--- Fetched Select Options ---");
+        for (const [fieldName, options] of Object.entries(selectOptions)) {
+            console.log(`Field: ${fieldName}`);
+            for (const [name, id] of options.entries()) {
+                console.log(`  - Option Name: "${name}", ID: "${id}"`);
+            }
+        }
+        console.log("------------------------------");
+        logDetails.push("Successfully fetched select options.");
 
         // --- Step 2: Fetch all records from the "Batch Update" view in SPT ---
         const viewName = "Batch Update";
@@ -111,12 +121,13 @@ export default async function handler(request, response) {
                 sellingPrice = mtbRecordFields["Nut Butter 365g (€/pot)"];
                 weightGrams = 750;
             }
-
-            // *** FINAL FIX: Use option ID for Single Select fields where possible ***
-            if (packageSize && selectOptions.packageSize?.has(packageSize)) {
-                updates.packageSize = { id: selectOptions.packageSize.get(packageSize) };
+            
+            // *** DEFENSIVE CODING: Trim whitespace before checking map ***
+            const trimmedPackageSize = packageSize?.trim();
+            if (trimmedPackageSize && selectOptions.packageSize?.has(trimmedPackageSize)) {
+                updates.packageSize = { id: selectOptions.packageSize.get(trimmedPackageSize) };
             } else {
-                updates.packageSize = packageSize; // Fallback for text fields
+                updates.packageSize = trimmedPackageSize; 
             }
             updates.sellingPrice = sellingPrice;
             updates.weightGrams = weightGrams;
@@ -137,15 +148,11 @@ export default async function handler(request, response) {
                 updates.category = { id: selectOptions.category.get(category) };
             }
 
-            // This is a linked record, not a single select. This needs a record ID.
-            // For now, we assume it's not being updated by this script to avoid errors.
-            // updates.baseProductGroup = ...; 
-
             const ingredientsText = mtbRecordFields.Ingredients || "";
             const allergenMatches = ingredientsText.match(/\b([A-Z][A-Z\s]+)\b/g) || [];
             updates.allergens = allergenMatches.map(allergen => {
                 const name = (allergen.trim().toLowerCase()).replace(/^\w/, c => c.toUpperCase());
-                return { name: name }; // Multi-select can create new options by name
+                return { name: name };
             });
 
             updates.supplierProductName = mtbRecordFields.supplierProductName;
@@ -197,4 +204,3 @@ export default async function handler(request, response) {
         return response.status(500).json({ error: error.message, details: logDetails });
     }
 }
-// --- End of batch update handler ---
