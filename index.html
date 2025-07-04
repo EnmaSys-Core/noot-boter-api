@@ -36,21 +36,26 @@
             </button>
         </div>
 
-        <div id="logContainer" class="mt-6 w-full bg-gray-900 rounded-md p-4 h-48 overflow-y-auto hidden">
-            <pre id="log" class="text-sm text-gray-200 whitespace-pre-wrap"></pre>
+        <div id="logContainerWrapper" class="mt-6 hidden">
+            <div id="logContainer" class="w-full bg-gray-900 rounded-md p-4 h-48 overflow-y-auto">
+                <pre id="log" class="text-sm text-gray-200 whitespace-pre-wrap"></pre>
+            </div>
+            <button id="copyLogButton" class="mt-2 w-full flex justify-center py-2 px-4 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500">
+                Copy Log
+            </button>
         </div>
     </div>
 
     <script>
         const updateButton = document.getElementById('updateButton');
         const passwordInput = document.getElementById('password');
-        const logContainer = document.getElementById('logContainer');
+        const logContainerWrapper = document.getElementById('logContainerWrapper');
         const logElement = document.getElementById('log');
+        const copyLogButton = document.getElementById('copyLogButton');
 
         function addToLog(message, isError = false) {
             const timestamp = new Date().toLocaleTimeString();
             const logMessage = document.createElement('div');
-            // Sanitize message to prevent HTML injection
             const textNode = document.createTextNode(message);
             const messageSpan = document.createElement('span');
             messageSpan.appendChild(textNode);
@@ -70,7 +75,7 @@
                 return;
             }
 
-            logContainer.classList.remove('hidden');
+            logContainerWrapper.classList.remove('hidden');
             logElement.innerHTML = '';
             updateButton.disabled = true;
             updateButton.textContent = 'Updating... Please Wait...';
@@ -80,18 +85,12 @@
             try {
                 const response = await fetch('/api/update-batch-products', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ password: password }),
                 });
 
-                // --- NEW, MORE ROBUST ERROR HANDLING ---
                 if (!response.ok) {
-                    // If the server response is not OK (e.g., 404, 500),
-                    // we try to get the error text from the response body.
                     const errorText = await response.text();
-                    // We throw a detailed error that will be caught by the catch block.
                     throw new Error(`Server responded with status ${response.status}. Response: ${errorText}`);
                 }
                 
@@ -103,7 +102,6 @@
                 }
 
             } catch (error) {
-                // The error message will now be much more informative.
                 addToLog(`FATAL ERROR: ${error.message}`, true);
             } finally {
                 updateButton.disabled = false;
@@ -111,7 +109,17 @@
                 addToLog('Process finished.');
             }
         });
+
+        copyLogButton.addEventListener('click', () => {
+            const logText = logElement.innerText;
+            const textArea = document.createElement('textarea');
+            textArea.value = logText;
+            document.body.appendChild(textArea);
+            textArea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textArea);
+            alert('Log copied to clipboard!');
+        });
     </script>
 </body>
 </html>
-<!-- End of file input -->
