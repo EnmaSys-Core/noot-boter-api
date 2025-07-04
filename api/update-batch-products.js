@@ -46,7 +46,6 @@ export default async function handler(request, response) {
 
 
         // --- Step 2: Fetch ALL records from MTB to create a lookup map ---
-        // This is much more efficient than fetching one MTB record per SPT record inside the loop.
         const mtbTableUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/Prices%2C%20purchase%2C%20and%20sell`;
         const mtbResponse = await fetch(mtbTableUrl, {
             headers: { 'Authorization': `Bearer ${AIRTABLE_PAT}` }
@@ -74,7 +73,6 @@ export default async function handler(request, response) {
                 continue;
             }
             
-            // --- Derivation Logic (same as before) ---
             const updates = {};
             const internalName = sptRecord.fields.internalName;
             const sptId = sptRecord.fields.sptId;
@@ -108,37 +106,41 @@ export default async function handler(request, response) {
             let productType = null;
             if (packageSize?.includes("Bag")) productType = "Nut Bag";
             else if (packageSize?.includes("Jar")) productType = "Nut Butter Jar";
-            updates.productType = productType;
+            // *** BUG FIX: Format for single-select field ***
+            if(productType) updates.productType = { name: productType };
 
             let category = null;
             const baseProductGroup = mtbRecordFields.baseProductGroup?.toLowerCase() || '';
             if (productType === "Nut Butter Jar") category = "Nut Butters";
             else if (baseProductGroup.includes("mix")) category = "Mixes";
             else category = "Whole Nuts";
-            updates.category = category;
+            // *** BUG FIX: Format for single-select field ***
+            if(category) updates.category = { name: category };
 
+            // These are direct copies
             updates.supplierProductName = mtbRecordFields.supplierProductName;
-            updates.baseProductGroup = mtbRecordFields.baseProductGroup;
+            updates.baseProductGroup = mtbRecordFields.baseProductGroup; // This is a linked record, so we pass the whole object
             updates.Ingredients = mtbRecordFields.Ingredients;
             updates.countryOfOrigin = mtbRecordFields.countryOfOrigin;
             updates.supplierProductUrl = mtbRecordFields.supplierProductUrl;
-            updates.isOrganic = mtbRecordFields.isOrganic;
-            updates.isRaw = mtbRecordFields.isRaw;
-            updates.isGeroosterd = mtbRecordFields.isGeroosterd;
-            updates.isGebrand = mtbRecordFields.isGebrand;
-            updates.isSalted = mtbRecordFields.isSalted;
-            updates.isNutbutterAvailable = mtbRecordFields.isNutbutterAvailable;
+            updates.isOrganic = mtbRecordFields.isOrganic || false;
+            updates.isRaw = mtbRecordFields.isRaw || false;
+            updates.isGeroosterd = mtbRecordFields.isGeroosterd || false;
+            updates.isGebrand = mtbRecordFields.isGebrand || false;
+            updates.isSalted = mtbRecordFields.isSalted || false;
+            updates.isNutbutterAvailable = mtbRecordFields.isNutbutterAvailable || false;
             updates.imageUrl = `/images/${sptId}.jpg`;
             updates.marketingName = internalName;
 
+            // *** BUG FIX: Format for multi-select field ***
             const ingredientsText = mtbRecordFields.Ingredients || "";
             const allergenMatches = ingredientsText.match(/\b([A-Z][A-Z\s]+)\b/g) || [];
             updates.allergens = allergenMatches.map(allergen => {
                 const cleaned = allergen.trim().toLowerCase();
-                return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+                const name = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+                return { name: name }; // Return an object with a 'name' property
             });
             
-            // Add the prepared update to our list of payloads
             updatePayloads.push({
                 id: sptRecord.id,
                 fields: updates
@@ -146,7 +148,6 @@ export default async function handler(request, response) {
         }
 
         // --- Step 4: Send updates to Airtable in batches of 10 ---
-        // Airtable's PATCH endpoint can update up to 10 records at once.
         for (let i = 0; i < updatePayloads.length; i += 10) {
             const batch = updatePayloads.slice(i, i + 10);
             console.log(`Updating batch of ${batch.length} records...`);
@@ -168,9 +169,7 @@ export default async function handler(request, response) {
             
             console.log(`Batch updated successfully.`);
             logDetails.push(`Batch updated successfully.`);
-
-            // Wait for 250ms to respect rate limits before sending the next batch
-            await delay(250);
+            await delay(250); // Respect rate limits
         }
 
         return response.status(200).json({ 
