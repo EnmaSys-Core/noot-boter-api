@@ -3,6 +3,32 @@ import fetch from 'node-fetch';
 // Helper function to add a delay, respecting Airtable's rate limit.
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// --- Airtable API Configuration ---
+const AIRTABLE_API_URL = 'https://api.airtable.com/v0';
+
+// This function fetches the schema for a specific table to get the options for select fields.
+// This is more robust than relying on text names.
+async function getSelectOptions(baseId, pat, tableName) {
+    const url = `https://api.airtable.com/v0/meta/bases/${baseId}/tables`;
+    const response = await fetch(url, { headers: { 'Authorization': `Bearer ${pat}` } });
+    if (!response.ok) throw new Error(`Failed to fetch base schema: ${await response.text()}`);
+    const schema = await response.json();
+    
+    const table = schema.tables.find(t => t.name === tableName);
+    if (!table) throw new Error(`Table '${tableName}' not found in base schema.`);
+
+    const optionsMap = {};
+    for (const field of table.fields) {
+        if (field.type === 'singleSelect' || field.type === 'multipleSelects') {
+            optionsMap[field.name] = new Map(
+                field.options.choices.map(choice => [choice.name, choice.id])
+            );
+        }
+    }
+    return optionsMap;
+}
+
+
 export default async function handler(request, response) {
     // --- Security & Setup ---
     if (request.method !== 'POST') {
@@ -20,10 +46,17 @@ export default async function handler(request, response) {
     const logDetails = [];
 
     try {
-        // --- Step 1: Fetch all records from the "Batch Update" view in SPT ---
-        const viewName = "Batch Update";
         const sptTableName = "SPT - Sellable Product Table";
-        const sptTableUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(sptTableName)}?view=${encodeURIComponent(viewName)}`;
+        const mtbTableName = "MTB - Prices, purchase and sell";
+
+        // --- Step 1: Fetch Select Field Options for robust updates ---
+        logDetails.push("Fetching field options from Airtable schema...");
+        const selectOptions = await getSelectOptions(AIRTABLE_BASE_ID, AIRTABLE_PAT, sptTableName);
+        console.log("Successfully fetched select options.");
+
+        // --- Step 2: Fetch all records from the "Batch Update" view in SPT ---
+        const viewName = "Batch Update";
+        const sptTableUrl = `${AIRTABLE_API_URL}/${AIRTABLE_BASE_ID}/${encodeURIComponent(sptTableName)}?view=${encodeURIComponent(viewName)}`;
         
         logDetails.push(`Fetching records from view: ${viewName}`);
         const sptResponse = await fetch(sptTableUrl, { headers: { 'Authorization': `Bearer ${AIRTABLE_PAT}` } });
@@ -37,16 +70,15 @@ export default async function handler(request, response) {
         }
         logDetails.push(`Found ${recordsToUpdate.length} records to update.`);
 
-        // --- Step 2: Fetch ALL records from MTB to create a lookup map ---
-        const mtbTableName = "MTB - Prices, purchase and sell";
-        const mtbTableUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(mtbTableName)}`;
+        // --- Step 3: Fetch ALL records from MTB to create a lookup map ---
+        const mtbTableUrl = `${AIRTABLE_API_URL}/${AIRTABLE_BASE_ID}/${encodeURIComponent(mtbTableName)}`;
         const mtbResponse = await fetch(mtbTableUrl, { headers: { 'Authorization': `Bearer ${AIRTABLE_PAT}` } });
         if (!mtbResponse.ok) throw new Error(`Failed to fetch MTB records: ${await mtbResponse.text()}`);
         const mtbData = await mtbResponse.json();
         const mtbLookup = new Map(mtbData.records.map(rec => [rec.fields.baseProductId, rec.fields]));
         console.log(`Created lookup map with ${mtbLookup.size} MTB records.`);
 
-        // --- Step 3: Loop through each SPT record and prepare the updates ---
+        // --- Step 4: Loop through each SPT record and prepare the updates ---
         const updatePayloads = [];
         for (const sptRecord of recordsToUpdate) {
             const linkedBaseId = sptRecord.fields.linkedBaseProductId;
@@ -80,32 +112,40 @@ export default async function handler(request, response) {
                 weightGrams = 750;
             }
 
-            // *** BUG FIX: Send packageSize as a simple string for the 'Single line text' field ***
-            updates.packageSize = packageSize;
+            // *** FINAL FIX: Use option ID for Single Select fields where possible ***
+            if (packageSize && selectOptions.packageSize?.has(packageSize)) {
+                updates.packageSize = { id: selectOptions.packageSize.get(packageSize) };
+            } else {
+                updates.packageSize = packageSize; // Fallback for text fields
+            }
             updates.sellingPrice = sellingPrice;
             updates.weightGrams = weightGrams;
 
             let productType = null;
             if (packageSize?.includes("Bag")) productType = "Nut Bag";
             else if (packageSize?.includes("Jar")) productType = "Nut Butter Jar";
-            if(productType) updates.productType = { name: productType };
+            if(productType && selectOptions.productType?.has(productType)) {
+                updates.productType = { id: selectOptions.productType.get(productType) };
+            }
 
             let category = null;
-            const baseProductGroup = mtbRecordFields.baseProductGroup?.name?.toLowerCase() || '';
+            const baseProductGroupText = mtbRecordFields.baseProductGroup?.name?.toLowerCase() || '';
             if (productType === "Nut Butter Jar") category = "Nut Butters";
-            else if (baseProductGroup.includes("mix")) category = "Mixes";
+            else if (baseProductGroupText.includes("mix")) category = "Mixes";
             else category = "Whole Nuts";
-            if(category) updates.category = { name: category };
-
-            if (mtbRecordFields.baseProductGroup) {
-               updates.baseProductGroup = { name: mtbRecordFields.baseProductGroup.name };
+            if(category && selectOptions.category?.has(category)) {
+                updates.category = { id: selectOptions.category.get(category) };
             }
+
+            // This is a linked record, not a single select. This needs a record ID.
+            // For now, we assume it's not being updated by this script to avoid errors.
+            // updates.baseProductGroup = ...; 
+
             const ingredientsText = mtbRecordFields.Ingredients || "";
             const allergenMatches = ingredientsText.match(/\b([A-Z][A-Z\s]+)\b/g) || [];
             updates.allergens = allergenMatches.map(allergen => {
-                const cleaned = allergen.trim().toLowerCase();
-                const name = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
-                return { name: name };
+                const name = (allergen.trim().toLowerCase()).replace(/^\w/, c => c.toUpperCase());
+                return { name: name }; // Multi-select can create new options by name
             });
 
             updates.supplierProductName = mtbRecordFields.supplierProductName;
@@ -124,16 +164,12 @@ export default async function handler(request, response) {
             updatePayloads.push({ id: sptRecord.id, fields: updates });
         }
 
-        // --- Step 4: Send updates to Airtable in batches of 10 ---
+        // --- Step 5: Send updates to Airtable in batches of 10 ---
         for (let i = 0; i < updatePayloads.length; i += 10) {
             const batch = updatePayloads.slice(i, i + 10);
             logDetails.push(`Updating batch of ${batch.length} records...`);
 
-            console.log("--- PAYLOAD TO BE SENT TO AIRTABLE ---");
-            console.log(JSON.stringify(batch, null, 2));
-            console.log("------------------------------------");
-
-            const updateUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(sptTableName)}`;
+            const updateUrl = `${AIRTABLE_API_URL}/${AIRTABLE_BASE_ID}/${encodeURIComponent(sptTableName)}`;
             const updateResponse = await fetch(updateUrl, {
                 method: 'PATCH',
                 headers: { 'Authorization': `Bearer ${AIRTABLE_PAT}`, 'Content-Type': 'application/json' },
@@ -141,7 +177,9 @@ export default async function handler(request, response) {
             });
 
             if (!updateResponse.ok) {
-                throw new Error(`Failed to update batch: ${await updateResponse.text()}`);
+                const errorBody = await updateResponse.text();
+                console.error("Airtable API Error:", errorBody);
+                throw new Error(`Failed to update batch: ${errorBody}`);
             }
             
             logDetails.push(`Batch updated successfully.`);
@@ -159,4 +197,4 @@ export default async function handler(request, response) {
         return response.status(500).json({ error: error.message, details: logDetails });
     }
 }
-// --- End of file: input
+// --- End of batch update handler ---
