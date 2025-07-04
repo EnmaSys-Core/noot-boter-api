@@ -88,7 +88,8 @@ export default async function handler(request, response) {
                 sellingPrice = mtbRecordFields["Verkoop 450g (€/kg)"];
                 weightGrams = 600;
             } else if (variantSuffix === "z1000") {
-                packageSize = "1kg Bag";
+                // *** BUG FIX: Changed "1kg Bag" to "1000g Bag" to match Airtable option ***
+                packageSize = "1000g Bag";
                 sellingPrice = mtbRecordFields["Verkoop 1kg (€/kg)"];
                 weightGrams = 1250;
             } else if (variantSuffix === "nb175") {
@@ -101,18 +102,15 @@ export default async function handler(request, response) {
                 weightGrams = 750;
             }
 
-            updates.packageSize = { name: packageSize }; // packageSize is a single select
+            // Note: The '.name' property is required for updating single-select fields
+            if (packageSize) updates.packageSize = { name: packageSize };
             updates.sellingPrice = sellingPrice;
             updates.weightGrams = weightGrams;
 
             let productType = null;
             if (packageSize?.includes("Bag")) productType = "Nut Bag";
             else if (packageSize?.includes("Jar")) productType = "Nut Butter Jar";
-            
-            // =================================================================
-            // --- DIAGNOSTIC CHANGE: The following line has been removed ---
-            // if(productType) updates.productType = { name: productType };
-            // =================================================================
+            if(productType) updates.productType = { name: productType };
 
             let category = null;
             const baseProductGroup = mtbRecordFields.baseProductGroup?.name?.toLowerCase() || '';
