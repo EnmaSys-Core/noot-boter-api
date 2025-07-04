@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Noot & Boter - Data Updater</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen">
+
+    <div class="w-full max-w-lg bg-white rounded-xl shadow-lg p-8">
+        <div class="flex flex-col items-center">
+            <svg class="w-16 h-16 text-yellow-600 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M11.42 15.17L17.25 21A2.652 2.652 0 0021 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 11-3.586-3.586l6.837-5.63m5.108-.233c.55-.164 1.163-.188 1.743-.14a4.5 4.5 0 004.474-4.474c-.048-.58-.298-1.193-.632-1.743m-4.474 4.474l-1.262 1.262" />
+            </svg>
+            <h1 class="text-2xl font-bold text-gray-800">Product Data Updater</h1>
+            <p class="text-gray-500 mt-2 text-center">This tool updates Airtable records in the 'Batch Update' view.</p>
+        </div>
+
+        <div class="mt-8 space-y-4">
+            <div>
+                <label for="password" class="text-sm font-medium text-gray-700">Password</label>
+                <input type="password" id="password" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-yellow-500 focus:border-yellow-500 sm:text-sm" placeholder="Enter update password">
+            </div>
+            
+            <button id="updateButton" class="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-yellow-600 hover:bg-yellow-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500 disabled:bg-gray-400 disabled:cursor-not-allowed">
+                Update Products
+            </button>
+        </div>
+
+        <div id="logContainer" class="mt-6 w-full bg-gray-900 rounded-md p-4 h-48 overflow-y-auto hidden">
+            <pre id="log" class="text-sm text-gray-200 whitespace-pre-wrap"></pre>
+        </div>
+    </div>
+
+    <script>
+        const updateButton = document.getElementById('updateButton');
+        const passwordInput = document.getElementById('password');
+        const logContainer = document.getElementById('logContainer');
+        const logElement = document.getElementById('log');
+
+        function addToLog(message, isError = false) {
+            const timestamp = new Date().toLocaleTimeString();
+            const logMessage = document.createElement('div');
+            logMessage.innerHTML = `<span class="text-gray-500">${timestamp}:</span> <span class="${isError ? 'text-red-400' : 'text-green-300'}">${message}</span>`;
+            logElement.appendChild(logMessage);
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+
+        updateButton.addEventListener('click', async () => {
+            const password = passwordInput.value;
+            if (!password) {
+                alert('Please enter the password.');
+                return;
+            }
+
+            // Show log and disable button
+            logContainer.classList.remove('hidden');
+            logElement.innerHTML = ''; // Clear previous logs
+            updateButton.disabled = true;
+            updateButton.textContent = 'Updating... Please Wait...';
+
+            addToLog('Starting batch update process...');
+
+            try {
+                const response = await fetch('/api/update-batch-products', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ password: password }),
+                });
+
+                const result = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(result.error || 'An unknown error occurred.');
+                }
+                
+                addToLog(`SUCCESS: ${result.message}`);
+                result.details.forEach(detail => addToLog(detail));
+
+            } catch (error) {
+                addToLog(`FATAL ERROR: ${error.message}`, true);
+            } finally {
+                // Re-enable button
+                updateButton.disabled = false;
+                updateButton.textContent = 'Update Products';
+                addToLog('Process finished.');
+            }
+        });
+    </script>
+</body>
+</html>

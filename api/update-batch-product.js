@@ -1,0 +1,186 @@
+import fetch from 'node-fetch';
+
+// Helper function to add a delay, respecting Airtable's rate limit.
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+export default async function handler(request, response) {
+    // --- Security & Setup ---
+    if (request.method !== 'POST') {
+        return response.status(405).json({ error: 'Method Not Allowed' });
+    }
+
+    const { password } = request.body;
+    const { AIRTABLE_PAT, AIRTABLE_BASE_ID, UPDATE_PASSWORD } = process.env;
+
+    if (password !== UPDATE_PASSWORD) {
+        return response.status(401).json({ error: 'Invalid password.' });
+    }
+
+    console.log("Password accepted. Starting batch update.");
+    const logDetails = [];
+
+    try {
+        // --- Step 1: Fetch all records from the "Batch Update" view in SPT ---
+        const viewName = "Batch Update";
+        const sptTableUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/Sellable%20Products%20Table?view=${encodeURIComponent(viewName)}`;
+        
+        console.log(`Fetching records from view: ${viewName}`);
+        logDetails.push(`Fetching records from view: ${viewName}`);
+
+        const sptResponse = await fetch(sptTableUrl, {
+            headers: { 'Authorization': `Bearer ${AIRTABLE_PAT}` }
+        });
+        if (!sptResponse.ok) throw new Error(`Failed to fetch SPT records: ${await sptResponse.text()}`);
+        
+        const sptData = await sptResponse.json();
+        const recordsToUpdate = sptData.records;
+
+        if (recordsToUpdate.length === 0) {
+            console.log("No records found in the 'Batch Update' view. Nothing to do.");
+            logDetails.push("No records found in the 'Batch Update' view. Nothing to do.");
+            return response.status(200).json({ message: "No records to update.", details: logDetails });
+        }
+
+        console.log(`Found ${recordsToUpdate.length} records to update.`);
+        logDetails.push(`Found ${recordsToUpdate.length} records to update.`);
+
+
+        // --- Step 2: Fetch ALL records from MTB to create a lookup map ---
+        // This is much more efficient than fetching one MTB record per SPT record inside the loop.
+        const mtbTableUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/Prices%2C%20purchase%2C%20and%20sell`;
+        const mtbResponse = await fetch(mtbTableUrl, {
+            headers: { 'Authorization': `Bearer ${AIRTABLE_PAT}` }
+        });
+        if (!mtbResponse.ok) throw new Error(`Failed to fetch MTB records: ${await mtbResponse.text()}`);
+
+        const mtbData = await mtbResponse.json();
+        const mtbLookup = new Map(mtbData.records.map(rec => [rec.fields.baseProductId, rec.fields]));
+        
+        console.log(`Created lookup map with ${mtbLookup.size} MTB records.`);
+
+
+        // --- Step 3: Loop through each SPT record and prepare the updates ---
+        const updatePayloads = [];
+        for (const sptRecord of recordsToUpdate) {
+            const linkedBaseId = sptRecord.fields.linkedBaseProductId;
+            if (!linkedBaseId) {
+                console.warn(`Skipping SPT record ${sptRecord.id} because linkedBaseProductId is empty.`);
+                continue;
+            }
+
+            const mtbRecordFields = mtbLookup.get(linkedBaseId);
+            if (!mtbRecordFields) {
+                console.warn(`Skipping SPT record ${sptRecord.id} because no matching base product was found in MTB.`);
+                continue;
+            }
+            
+            // --- Derivation Logic (same as before) ---
+            const updates = {};
+            const internalName = sptRecord.fields.internalName;
+            const sptId = sptRecord.fields.sptId;
+            const nameMatch = internalName.match(/-\s*(z\d+|nb\d+)$/);
+            const variantSuffix = nameMatch ? nameMatch[1] : null;
+
+            let packageSize = null, sellingPrice = null, weightGrams = null;
+
+            if (variantSuffix === "z450") {
+                packageSize = "450g Bag";
+                sellingPrice = mtbRecordFields["Verkoop 450g (€/kg)"];
+                weightGrams = 600;
+            } else if (variantSuffix === "z1000") {
+                packageSize = "1kg Bag";
+                sellingPrice = mtbRecordFields["Verkoop 1kg (€/kg)"];
+                weightGrams = 1250;
+            } else if (variantSuffix === "nb175") {
+                packageSize = "175g Jar";
+                sellingPrice = mtbRecordFields["Nut Butter 175g (€/potje)"];
+                weightGrams = 400;
+            } else if (variantSuffix === "nb365") {
+                packageSize = "365g Jar";
+                sellingPrice = mtbRecordFields["Nut Butter 365g (€/pot)"];
+                weightGrams = 750;
+            }
+
+            updates.packageSize = packageSize;
+            updates.sellingPrice = sellingPrice;
+            updates.weightGrams = weightGrams;
+
+            let productType = null;
+            if (packageSize?.includes("Bag")) productType = "Nut Bag";
+            else if (packageSize?.includes("Jar")) productType = "Nut Butter Jar";
+            updates.productType = productType;
+
+            let category = null;
+            const baseProductGroup = mtbRecordFields.baseProductGroup?.toLowerCase() || '';
+            if (productType === "Nut Butter Jar") category = "Nut Butters";
+            else if (baseProductGroup.includes("mix")) category = "Mixes";
+            else category = "Whole Nuts";
+            updates.category = category;
+
+            updates.supplierProductName = mtbRecordFields.supplierProductName;
+            updates.baseProductGroup = mtbRecordFields.baseProductGroup;
+            updates.Ingredients = mtbRecordFields.Ingredients;
+            updates.countryOfOrigin = mtbRecordFields.countryOfOrigin;
+            updates.supplierProductUrl = mtbRecordFields.supplierProductUrl;
+            updates.isOrganic = mtbRecordFields.isOrganic;
+            updates.isRaw = mtbRecordFields.isRaw;
+            updates.isGeroosterd = mtbRecordFields.isGeroosterd;
+            updates.isGebrand = mtbRecordFields.isGebrand;
+            updates.isSalted = mtbRecordFields.isSalted;
+            updates.isNutbutterAvailable = mtbRecordFields.isNutbutterAvailable;
+            updates.imageUrl = `/images/${sptId}.jpg`;
+            updates.marketingName = internalName;
+
+            const ingredientsText = mtbRecordFields.Ingredients || "";
+            const allergenMatches = ingredientsText.match(/\b([A-Z][A-Z\s]+)\b/g) || [];
+            updates.allergens = allergenMatches.map(allergen => {
+                const cleaned = allergen.trim().toLowerCase();
+                return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+            });
+            
+            // Add the prepared update to our list of payloads
+            updatePayloads.push({
+                id: sptRecord.id,
+                fields: updates
+            });
+        }
+
+        // --- Step 4: Send updates to Airtable in batches of 10 ---
+        // Airtable's PATCH endpoint can update up to 10 records at once.
+        for (let i = 0; i < updatePayloads.length; i += 10) {
+            const batch = updatePayloads.slice(i, i + 10);
+            console.log(`Updating batch of ${batch.length} records...`);
+            logDetails.push(`Updating batch of ${batch.length} records...`);
+
+            const updateUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/Sellable%20Products%20Table`;
+            const updateResponse = await fetch(updateUrl, {
+                method: 'PATCH',
+                headers: {
+                    'Authorization': `Bearer ${AIRTABLE_PAT}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ records: batch })
+            });
+
+            if (!updateResponse.ok) {
+                throw new Error(`Failed to update batch: ${await updateResponse.text()}`);
+            }
+            
+            console.log(`Batch updated successfully.`);
+            logDetails.push(`Batch updated successfully.`);
+
+            // Wait for 250ms to respect rate limits before sending the next batch
+            await delay(250);
+        }
+
+        return response.status(200).json({ 
+            message: `Successfully processed and updated ${updatePayloads.length} records.`,
+            details: logDetails
+        });
+
+    } catch (error) {
+        console.error("An error occurred during the batch update:", error);
+        logDetails.push(`ERROR: ${error.message}`);
+        return response.status(500).json({ error: error.message, details: logDetails });
+    }
+}
