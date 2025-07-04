@@ -22,7 +22,10 @@ export default async function handler(request, response) {
     try {
         // --- Step 1: Fetch all records from the "Batch Update" view in SPT ---
         const viewName = "Batch Update";
-        const sptTableUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/Sellable%20Products%20Table?view=${encodeURIComponent(viewName)}`;
+        
+        // *** BUG FIX: Corrected the table name to match your Airtable base ***
+        const sptTableName = "SPT - Sellable Product Table";
+        const sptTableUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(sptTableName)}?view=${encodeURIComponent(viewName)}`;
         
         console.log(`Fetching records from view: ${viewName}`);
         logDetails.push(`Fetching records from view: ${viewName}`);
@@ -46,7 +49,9 @@ export default async function handler(request, response) {
 
 
         // --- Step 2: Fetch ALL records from MTB to create a lookup map ---
-        const mtbTableUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/Prices%2C%20purchase%2C%20and%20sell`;
+        // *** BUG FIX: Corrected the table name to match your Airtable base ***
+        const mtbTableName = "Prices, purchase, and sell";
+        const mtbTableUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(mtbTableName)}`;
         const mtbResponse = await fetch(mtbTableUrl, {
             headers: { 'Authorization': `Bearer ${AIRTABLE_PAT}` }
         });
@@ -106,7 +111,6 @@ export default async function handler(request, response) {
             let productType = null;
             if (packageSize?.includes("Bag")) productType = "Nut Bag";
             else if (packageSize?.includes("Jar")) productType = "Nut Butter Jar";
-            // *** BUG FIX: Format for single-select field ***
             if(productType) updates.productType = { name: productType };
 
             let category = null;
@@ -114,12 +118,10 @@ export default async function handler(request, response) {
             if (productType === "Nut Butter Jar") category = "Nut Butters";
             else if (baseProductGroup.includes("mix")) category = "Mixes";
             else category = "Whole Nuts";
-            // *** BUG FIX: Format for single-select field ***
             if(category) updates.category = { name: category };
 
-            // These are direct copies
             updates.supplierProductName = mtbRecordFields.supplierProductName;
-            updates.baseProductGroup = mtbRecordFields.baseProductGroup; // This is a linked record, so we pass the whole object
+            updates.baseProductGroup = mtbRecordFields.baseProductGroup;
             updates.Ingredients = mtbRecordFields.Ingredients;
             updates.countryOfOrigin = mtbRecordFields.countryOfOrigin;
             updates.supplierProductUrl = mtbRecordFields.supplierProductUrl;
@@ -132,13 +134,12 @@ export default async function handler(request, response) {
             updates.imageUrl = `/images/${sptId}.jpg`;
             updates.marketingName = internalName;
 
-            // *** BUG FIX: Format for multi-select field ***
             const ingredientsText = mtbRecordFields.Ingredients || "";
             const allergenMatches = ingredientsText.match(/\b([A-Z][A-Z\s]+)\b/g) || [];
             updates.allergens = allergenMatches.map(allergen => {
                 const cleaned = allergen.trim().toLowerCase();
                 const name = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
-                return { name: name }; // Return an object with a 'name' property
+                return { name: name };
             });
             
             updatePayloads.push({
@@ -153,7 +154,7 @@ export default async function handler(request, response) {
             console.log(`Updating batch of ${batch.length} records...`);
             logDetails.push(`Updating batch of ${batch.length} records...`);
 
-            const updateUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/Sellable%20Products%20Table`;
+            const updateUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(sptTableName)}`;
             const updateResponse = await fetch(updateUrl, {
                 method: 'PATCH',
                 headers: {
@@ -169,7 +170,7 @@ export default async function handler(request, response) {
             
             console.log(`Batch updated successfully.`);
             logDetails.push(`Batch updated successfully.`);
-            await delay(250); // Respect rate limits
+            await delay(250);
         }
 
         return response.status(200).json({ 
@@ -183,3 +184,4 @@ export default async function handler(request, response) {
         return response.status(500).json({ error: error.message, details: logDetails });
     }
 }
+// --- End of file: api/update-batch-products.js
